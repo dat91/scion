@@ -24,6 +24,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/apiclient"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
 )
 
@@ -200,15 +201,22 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 	}
 
 	// 3. Hub auth token
+	// SCION_AUTH_TOKEN must hold an agent JWT — never a dev token. The dev
+	// token reaches the agent through ResolvedEnv["SCION_DEV_TOKEN"] and the
+	// in-container CLI's WithAutoDevAuth path. If the broker process happens
+	// to have SCION_AUTH_TOKEN set to its own dev token (cmd/server_foreground.go
+	// does this in dev-auth mode), leaking it here would cause the agent to
+	// write the dev token into ~/.scion/scion-token, which the CLI then sends
+	// as X-Scion-Agent-Token and the hub rejects as an invalid agent token.
 	if in.AgentToken != "" {
 		env["SCION_AUTH_TOKEN"] = in.AgentToken
 		if s.config.Debug {
 			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from agent token", "agent_id", in.AgentID, "length", len(in.AgentToken))
 		}
-	} else if devToken := os.Getenv("SCION_AUTH_TOKEN"); devToken != "" {
-		env["SCION_AUTH_TOKEN"] = devToken
+	} else if brokerToken := os.Getenv("SCION_AUTH_TOKEN"); brokerToken != "" && !apiclient.IsDevToken(brokerToken) {
+		env["SCION_AUTH_TOKEN"] = brokerToken
 		if s.config.Debug {
-			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from broker env", "agent_id", in.AgentID, "length", len(devToken))
+			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from broker env", "agent_id", in.AgentID, "length", len(brokerToken))
 		}
 	}
 
