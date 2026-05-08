@@ -591,12 +591,19 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 			}
 		}
 	}
-	// If hub endpoint is now set but no auth token, resolve dev auth token
-	// from the host filesystem (env vars or ~/.scion/dev-token file).
+	// If hub endpoint is set but no agent token, surface any host-level dev
+	// token through SCION_DEV_TOKEN so the in-container CLI's WithAutoDevAuth
+	// path can use it as fallback hub auth. The dev token must NOT enter the
+	// SCION_AUTH_TOKEN channel — that channel is reserved for hub-issued agent
+	// JWTs, which are persisted to ~/.scion/scion-token and sent as
+	// X-Scion-Agent-Token. Persisting a dev token there causes the hub to
+	// reject the agent's requests.
 	if _, ok := opts.Env["SCION_HUB_ENDPOINT"]; ok {
 		if _, tokenSet := opts.Env["SCION_AUTH_TOKEN"]; !tokenSet {
-			if token := apiclient.ResolveDevToken(); token != "" {
-				opts.Env["SCION_AUTH_TOKEN"] = token
+			if _, devSet := opts.Env["SCION_DEV_TOKEN"]; !devSet {
+				if token := apiclient.ResolveDevToken(); token != "" {
+					opts.Env["SCION_DEV_TOKEN"] = token
+				}
 			}
 		}
 	}
@@ -633,21 +640,30 @@ func (m *AgentManager) Start(ctx context.Context, opts api.StartOptions) (*api.A
 	// Write the agent token to the canonical token file in the agent home
 	// directory so that all processes inside the container read from the file
 	// rather than relying on an environment variable that goes stale after
-	// token refresh.
+	// token refresh. Dev tokens are never persisted here — they belong on the
+	// SCION_DEV_TOKEN channel, not SCION_AUTH_TOKEN. This guard is defensive:
+	// dev tokens should already have been routed away upstream.
 	if token, ok := opts.Env["SCION_AUTH_TOKEN"]; ok && token != "" {
-		scionDir := filepath.Join(agentHome, ".scion")
-		if err := os.MkdirAll(scionDir, 0700); err != nil {
-			util.Debugf("Start: failed to create .scion dir for token file: %v", err)
-		} else {
-			tokenPath := filepath.Join(scionDir, "scion-token")
-			tmp := tokenPath + ".tmp"
-			if err := os.WriteFile(tmp, []byte(token), 0600); err != nil {
-				util.Debugf("Start: failed to write token file: %v", err)
-			} else if err := os.Rename(tmp, tokenPath); err != nil {
-				util.Debugf("Start: failed to rename token file: %v", err)
-				os.Remove(tmp)
+		if !apiclient.IsDevToken(token) {
+			scionDir := filepath.Join(agentHome, ".scion")
+			if err := os.MkdirAll(scionDir, 0700); err != nil {
+				util.Debugf("Start: failed to create .scion dir for token file: %v", err)
 			} else {
-				util.Debugf("Start: wrote agent token to %s", tokenPath)
+				tokenPath := filepath.Join(scionDir, "scion-token")
+				tmp := tokenPath + ".tmp"
+				if err := os.WriteFile(tmp, []byte(token), 0600); err != nil {
+					util.Debugf("Start: failed to write token file: %v", err)
+				} else if err := os.Rename(tmp, tokenPath); err != nil {
+					util.Debugf("Start: failed to rename token file: %v", err)
+					os.Remove(tmp)
+				} else {
+					util.Debugf("Start: wrote agent token to %s", tokenPath)
+				}
+			}
+		} else {
+			util.Debugf("Start: skipping scion-token file write for dev token; routing via SCION_DEV_TOKEN")
+			if _, exists := opts.Env["SCION_DEV_TOKEN"]; !exists {
+				opts.Env["SCION_DEV_TOKEN"] = token
 			}
 		}
 		delete(opts.Env, "SCION_AUTH_TOKEN")

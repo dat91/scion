@@ -24,6 +24,7 @@ import (
 
 	"github.com/GoogleCloudPlatform/scion/pkg/agent"
 	"github.com/GoogleCloudPlatform/scion/pkg/api"
+	"github.com/GoogleCloudPlatform/scion/pkg/apiclient"
 	"github.com/GoogleCloudPlatform/scion/pkg/config"
 )
 
@@ -200,15 +201,23 @@ func (s *Server) buildStartContext(ctx context.Context, in startContextInputs) (
 	}
 
 	// 3. Hub auth token
+	//
+	// SCION_AUTH_TOKEN must hold a hub-issued agent JWT — the agent persists
+	// it as ~/.scion/scion-token and sends it via X-Scion-Agent-Token. A dev
+	// token in this channel is rejected by the hub. The broker process may
+	// have its own SCION_AUTH_TOKEN set to a dev token in dev-auth mode
+	// (see cmd/server_foreground.go), so we explicitly skip dev tokens when
+	// falling back to the broker env. Dev auth still reaches the agent via
+	// SCION_DEV_TOKEN (injected by the hub dispatcher).
 	if in.AgentToken != "" {
 		env["SCION_AUTH_TOKEN"] = in.AgentToken
 		if s.config.Debug {
 			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from agent token", "agent_id", in.AgentID, "length", len(in.AgentToken))
 		}
-	} else if devToken := os.Getenv("SCION_AUTH_TOKEN"); devToken != "" {
-		env["SCION_AUTH_TOKEN"] = devToken
+	} else if brokerToken := os.Getenv("SCION_AUTH_TOKEN"); brokerToken != "" && !apiclient.IsDevToken(brokerToken) {
+		env["SCION_AUTH_TOKEN"] = brokerToken
 		if s.config.Debug {
-			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from broker env", "agent_id", in.AgentID, "length", len(devToken))
+			s.agentLifecycleLog.Debug("SCION_AUTH_TOKEN set from broker env", "agent_id", in.AgentID, "length", len(brokerToken))
 		}
 	}
 

@@ -1835,8 +1835,10 @@ profiles:
   endpoint: "http://localhost:9810"
 `), 0644)
 
-	// Write a dev-token file so the token resolution finds it
-	os.WriteFile(filepath.Join(globalScionDir, "dev-token"), []byte("scion-dev-test-token-abc"), 0644)
+	// Write a dev-token file so the token resolution finds it.
+	// Use a real dev-prefixed token so apiclient.IsDevToken matches.
+	const hostDevToken = "scion_dev_testtokenabc"
+	os.WriteFile(filepath.Join(globalScionDir, "dev-token"), []byte(hostDevToken), 0644)
 
 	// Capture the RunConfig
 	var capturedConfig runtime.RunConfig
@@ -1876,18 +1878,28 @@ profiles:
 	if got := envMap["SCION_HUB_URL"]; got != "http://localhost:9810" {
 		t.Errorf("SCION_HUB_URL = %q, want %q", got, "http://localhost:9810")
 	}
-	// SCION_AUTH_TOKEN should NOT be in the container env (it's written to the token file instead)
+	// SCION_AUTH_TOKEN must never carry a dev token — that channel is reserved
+	// for hub-issued agent JWTs which get persisted as ~/.scion/scion-token.
 	if _, exists := envMap["SCION_AUTH_TOKEN"]; exists {
-		t.Error("expected SCION_AUTH_TOKEN to NOT be in container env (should be in token file)")
+		t.Error("expected SCION_AUTH_TOKEN to NOT be in container env when only a dev token is available")
 	}
 
-	// Verify the token was written to the agent home token file
-	tokenData, err := os.ReadFile(filepath.Join(capturedConfig.HomeDir, ".scion", "scion-token"))
-	if err != nil {
-		t.Fatalf("failed to read token file: %v", err)
+	// Dev token must reach the agent via SCION_DEV_TOKEN so the in-container
+	// CLI's WithAutoDevAuth path can pick it up.
+	if got := envMap["SCION_DEV_TOKEN"]; got != hostDevToken {
+		t.Errorf("SCION_DEV_TOKEN = %q, want %q", got, hostDevToken)
 	}
-	if got := strings.TrimSpace(string(tokenData)); got != "scion-dev-test-token-abc" {
-		t.Errorf("token file = %q, want %q", got, "scion-dev-test-token-abc")
+
+	// scion-token must NOT be written when only a dev token is available —
+	// persisting a dev token there causes the hub to reject the agent's
+	// X-Scion-Agent-Token requests.
+	tokenPath := filepath.Join(capturedConfig.HomeDir, ".scion", "scion-token")
+	if _, err := os.Stat(tokenPath); !os.IsNotExist(err) {
+		if data, readErr := os.ReadFile(tokenPath); readErr == nil {
+			t.Errorf("scion-token file should not exist for dev token, got contents %q", string(data))
+		} else {
+			t.Errorf("scion-token file should not exist for dev token (stat err: %v)", err)
+		}
 	}
 }
 

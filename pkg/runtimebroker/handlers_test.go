@@ -976,6 +976,36 @@ func TestCreateAgentWithoutHubCredentials(t *testing.T) {
 	}
 }
 
+// TestCreateAgentDoesNotLeakBrokerDevTokenAsAgentToken guards against a
+// dev-auth leak: when a broker runs in dev-auth mode it sets its own process
+// SCION_AUTH_TOKEN to a dev token (see cmd/server_foreground.go). If that
+// dev token were forwarded to the agent as SCION_AUTH_TOKEN the agent would
+// persist it as ~/.scion/scion-token and send it as X-Scion-Agent-Token,
+// which the hub rejects as an invalid agent token.
+func TestCreateAgentDoesNotLeakBrokerDevTokenAsAgentToken(t *testing.T) {
+	// Simulate dev-auth mode on the broker process.
+	t.Setenv("SCION_AUTH_TOKEN", "scion_dev_deadbeefcafef00d")
+
+	srv, mgr := newTestServerWithEnvCapture()
+
+	// Request omits agentToken — mirrors the dashboard create path in
+	// dev-auth mode where the hub does not issue a per-agent JWT.
+	body := `{"name": "no-jwt-agent"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/agents", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	srv.Handler().ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected status %d, got %d: %s", http.StatusCreated, w.Code, w.Body.String())
+	}
+
+	if got, exists := mgr.lastEnv["SCION_AUTH_TOKEN"]; exists {
+		t.Errorf("expected SCION_AUTH_TOKEN to be unset when broker env holds a dev token, got %q", got)
+	}
+}
+
 // provisionCapturingManager tracks whether Provision vs Start was called.
 type provisionCapturingManager struct {
 	mockManager
