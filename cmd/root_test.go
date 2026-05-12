@@ -131,7 +131,7 @@ func TestFormatFlagCheck(t *testing.T) {
 
 func TestHubAuthLoginDoesNotRequireImageRegistry(t *testing.T) {
 	origGlobalMode := globalMode
-	origGrovePath := grovePath
+	origProjectPath:= projectPath
 	origProfile := profile
 	origOutputFormat := outputFormat
 	origNoHub := noHub
@@ -140,7 +140,7 @@ func TestHubAuthLoginDoesNotRequireImageRegistry(t *testing.T) {
 	origAutoConfirm := autoConfirm
 	defer func() {
 		globalMode = origGlobalMode
-		grovePath = origGrovePath
+		projectPath = origProjectPath
 		profile = origProfile
 		outputFormat = origOutputFormat
 		noHub = origNoHub
@@ -158,7 +158,7 @@ func TestHubAuthLoginDoesNotRequireImageRegistry(t *testing.T) {
 	}
 
 	globalMode = true
-	grovePath = ""
+	projectPath = ""
 	profile = ""
 	outputFormat = ""
 	noHub = false
@@ -172,7 +172,7 @@ func TestHubAuthLoginDoesNotRequireImageRegistry(t *testing.T) {
 
 func TestServerStartDoesNotRequireImageRegistry(t *testing.T) {
 	origGlobalMode := globalMode
-	origGrovePath := grovePath
+	origProjectPath:= projectPath
 	origProfile := profile
 	origOutputFormat := outputFormat
 	origNoHub := noHub
@@ -180,7 +180,7 @@ func TestServerStartDoesNotRequireImageRegistry(t *testing.T) {
 	origAutoConfirm := autoConfirm
 	defer func() {
 		globalMode = origGlobalMode
-		grovePath = origGrovePath
+		projectPath = origProjectPath
 		profile = origProfile
 		outputFormat = origOutputFormat
 		noHub = origNoHub
@@ -198,7 +198,7 @@ func TestServerStartDoesNotRequireImageRegistry(t *testing.T) {
 	}
 
 	globalMode = true
-	grovePath = ""
+	projectPath = ""
 	profile = ""
 	outputFormat = ""
 	noHub = true
@@ -359,6 +359,9 @@ func TestNonInteractiveImpliesAutoConfirm(t *testing.T) {
 		outputFormat = origFormat
 	}()
 
+	// Ensure agent-mode auto-enable doesn't interfere with flag-level tests
+	t.Setenv("SCION_CLI_MODE", "human")
+
 	t.Run("nonInteractive sets autoConfirm true", func(t *testing.T) {
 		autoConfirm = false
 		nonInteractive = true
@@ -394,6 +397,53 @@ func TestNonInteractiveImpliesAutoConfirm(t *testing.T) {
 		assert.False(t, autoConfirm, "autoConfirm should remain false")
 		assert.False(t, IsAutoConfirm(), "IsAutoConfirm() should return false")
 		assert.False(t, IsNonInteractive(), "IsNonInteractive() should return false")
+	})
+}
+
+func TestAgentModeImpliesNonInteractive(t *testing.T) {
+	origAutoConfirm := autoConfirm
+	origNonInteractive := nonInteractive
+	origFormat := outputFormat
+	defer func() {
+		autoConfirm = origAutoConfirm
+		nonInteractive = origNonInteractive
+		outputFormat = origFormat
+	}()
+
+	t.Run("agent mode auto-enables non-interactive", func(t *testing.T) {
+		t.Setenv("SCION_CLI_MODE", "agent")
+		autoConfirm = false
+		nonInteractive = false
+		outputFormat = ""
+
+		_ = rootCmd.PersistentPreRunE(&cobra.Command{Use: "scion"}, []string{})
+
+		assert.True(t, nonInteractive, "nonInteractive should be auto-enabled in agent mode")
+		assert.True(t, autoConfirm, "autoConfirm should be implied by nonInteractive")
+	})
+
+	t.Run("assistant mode does not auto-enable non-interactive", func(t *testing.T) {
+		t.Setenv("SCION_CLI_MODE", "assistant")
+		autoConfirm = false
+		nonInteractive = false
+		outputFormat = ""
+
+		_ = rootCmd.PersistentPreRunE(&cobra.Command{Use: "scion"}, []string{})
+
+		assert.False(t, nonInteractive, "nonInteractive should not be auto-enabled in assistant mode")
+		assert.False(t, autoConfirm, "autoConfirm should remain false in assistant mode")
+	})
+
+	t.Run("skipped when already non-interactive", func(t *testing.T) {
+		t.Setenv("SCION_CLI_MODE", "agent")
+		autoConfirm = false
+		nonInteractive = true
+		outputFormat = ""
+
+		_ = rootCmd.PersistentPreRunE(&cobra.Command{Use: "scion"}, []string{})
+
+		assert.True(t, nonInteractive, "nonInteractive should remain true")
+		assert.True(t, autoConfirm, "autoConfirm should be set by the flag-level check")
 	})
 }
 

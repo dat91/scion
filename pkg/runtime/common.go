@@ -68,6 +68,13 @@ func ResolveContainerWorkspace(repoRoot, workspace string, gitClone *api.GitClon
 	return "/workspace"
 }
 
+// shellQuote returns s quoted for safe embedding in a POSIX shell command.
+// It uses single quotes, which prevent all shell interpretation (variable
+// expansion, command substitution via backticks or $(), globbing, etc.).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
 // buildCommonRunArgs constructs the common arguments for 'run' command across different runtimes.
 func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	args := []string{"run", "-d", "-i"}
@@ -195,7 +202,7 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 			// live under <workspace>/.scion/agents/ on the broker — that path
 			// would be visible to every container in the grove. Provisioning
 			// relocates prompt.md and scion-agent.json to
-			// ~/.scion/grove-configs/<slug>__<uuid>/.scion/agents/<name>/
+			// ~/.scion/project-configs/<slug>__<uuid>/.scion/agents/<name>/
 			// (config.GetAgentDir with sharedWorkspace=true), so there is
 			// nothing to leak through this mount. See
 			// .design/hub-shared-workspace-isolation.md (defense by absence).
@@ -273,6 +280,12 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	// Pass host user UID/GID for container user synchronization
 	addEnv("SCION_HOST_UID", fmt.Sprintf("%d", os.Getuid()))
 	addEnv("SCION_HOST_GID", fmt.Sprintf("%d", os.Getgid()))
+
+	// Phase 3 & 5: Project/Grove identity injection
+	addEnv("SCION_PROJECT", config.Project)
+	addEnv("SCION_GROVE", config.Project)
+	addEnv("SCION_PROJECT_ID", config.ProjectID)
+	addEnv("SCION_GROVE_ID", config.ProjectID)
 
 	// Mount gcloud config if it exists on the host (local mode only).
 	// In broker mode, credentials are projected via ResolvedSecrets;
@@ -373,11 +386,20 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	for k, v := range config.Annotations {
 		addArg("--label", fmt.Sprintf("%s=%s", k, v))
 	}
+
+	// Phase 5: Standard project labels
+	if config.Project != "" {
+		addArg("--label", fmt.Sprintf("scion.project=%s", config.Project))
+		addArg("--label", fmt.Sprintf("scion.grove=%s", config.Project))
+	}
+	if config.ProjectID != "" {
+		addArg("--label", fmt.Sprintf("scion.project_id=%s", config.ProjectID))
+		addArg("--label", fmt.Sprintf("scion.grove_id=%s", config.ProjectID))
+	}
+
 	if config.Template != "" {
 		addArg("--label", fmt.Sprintf("scion.template=%s", config.Template))
 	}
-
-	args = append(args, config.Image)
 
 	// Get command from harness
 	var harnessArgs []string
@@ -387,14 +409,12 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 		return nil, fmt.Errorf("no harness provided")
 	}
 
-	// Build tmux-wrapped command
+	// Build tmux-wrapped command — use POSIX single-quote escaping so that
+	// shell metacharacters (backticks, $, etc.) in the task prompt are not
+	// interpreted by sh -c.
 	var quotedArgs []string
 	for _, a := range harnessArgs {
-		if strings.ContainsAny(a, " \t\n\"'$") {
-			quotedArgs = append(quotedArgs, fmt.Sprintf("%q", a))
-		} else {
-			quotedArgs = append(quotedArgs, a)
-		}
+		quotedArgs = append(quotedArgs, shellQuote(a))
 	}
 	cmdLine := strings.Join(quotedArgs, " ")
 
@@ -406,8 +426,19 @@ func buildCommonRunArgs(config RunConfig) ([]string, error) {
 	)
 
 	if len(fuseMounts) > 0 {
+		// Pass tmuxCmd via env var to avoid double-shell quoting issues.
+		// The env var value is set by Docker/Podman without shell
+		// interpretation, then safely expanded by sh via "$SCION_START_CMD".
+		// Must be added before the image name — Docker/Podman require all
+		// flags before the image argument.
+		addArg("-e", fmt.Sprintf("SCION_START_CMD=%s", tmuxCmd))
+	}
+
+	args = append(args, config.Image)
+
+	if len(fuseMounts) > 0 {
 		mountCmds := strings.Join(fuseMounts, " && ")
-		wrapped := fmt.Sprintf("%s && exec sh -c %q", mountCmds, tmuxCmd)
+		wrapped := fmt.Sprintf(`%s && exec sh -c "$SCION_START_CMD"`, mountCmds)
 		args = append(args, "sh", "-c", wrapped)
 	} else {
 		args = append(args, "sh", "-c", tmuxCmd)

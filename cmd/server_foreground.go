@@ -589,6 +589,12 @@ func initStore(cfg *config.GlobalConfig) (store.Store, error) {
 			return nil, fmt.Errorf("failed to run ent migrations: %w", err)
 		}
 
+		if err := entc.MigrateGroveToProjectData(context.Background(), entDSN, sqliteStore); err != nil {
+			entClient.Close()
+			sqliteStore.Close()
+			return nil, fmt.Errorf("failed to migrate ent data: %w", err)
+		}
+
 		s := entadapter.NewCompositeStore(sqliteStore, entClient)
 
 		if err := s.Ping(context.Background()); err != nil {
@@ -713,6 +719,7 @@ func initHubServer(ctx context.Context, cfg *config.GlobalConfig, s store.Store,
 		Debug:                 enableDebug,
 		AuthorizedDomains:     cfg.Auth.AuthorizedDomains,
 		AdminEmails:           adminEmailList,
+		UserAccessMode:        cfg.Auth.UserAccessMode,
 		HubEndpoint:           hubEndpoint,
 		SoftDeleteRetention:   cfg.Hub.SoftDeleteRetention,
 		SoftDeleteRetainFiles: cfg.Hub.SoftDeleteRetainFiles,
@@ -952,6 +959,7 @@ func initWebServer(cfg *config.GlobalConfig, hubSrv *hub.Server, devAuthToken st
 		DevAuthToken:       devAuthToken,
 		AuthorizedDomains:  webAuthorizedDomains,
 		AdminEmails:        webAdminEmails,
+		UserAccessMode:     cfg.Auth.UserAccessMode,
 		AdminMode:          adminMode,
 		MaintenanceMessage: maintenanceMessage,
 	}
@@ -1025,7 +1033,7 @@ func startRuntimeBroker(ctx context.Context, cmd *cobra.Command, cfg *config.Glo
 			rhEndpoint = fmt.Sprintf("http://localhost:%d", cfg.RuntimeBroker.Port)
 		}
 
-		effectiveID, regErr := registerGlobalGroveAndBroker(ctx, s, brokerID, brokerName, rhEndpoint, rt, serverAutoProvide, brokerSettings)
+		effectiveID, regErr := registerGlobalProjectAndBroker(ctx, s, brokerID, brokerName, rhEndpoint, rt, serverAutoProvide, brokerSettings)
 		if regErr != nil {
 			log.Printf("Warning: failed to register global grove: %v", regErr)
 		} else {

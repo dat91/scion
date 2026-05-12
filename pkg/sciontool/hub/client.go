@@ -135,6 +135,9 @@ type StatusUpdate struct {
 	CurrentTurns      *int   `json:"currentTurns,omitempty"`
 	CurrentModelCalls *int   `json:"currentModelCalls,omitempty"`
 	StartedAt         string `json:"startedAt,omitempty"`
+
+	// Exit tracking
+	ExitCode *int `json:"exitCode,omitempty"`
 }
 
 // Client is a Hub API client for sciontool.
@@ -524,6 +527,11 @@ const (
 	EnvGitHubTokenPath = "SCION_GITHUB_TOKEN_PATH"
 	// DefaultGitHubTokenPath is the default path for the GitHub token file.
 	DefaultGitHubTokenPath = "/tmp/.github-token"
+	// EnvUserGitHubToken is set to "true" when the user has explicitly
+	// provided their own GITHUB_TOKEN alongside a GitHub App installation.
+	// When set, the gh CLI wrapper skips token injection so the user's
+	// token takes precedence.
+	EnvUserGitHubToken = "SCION_USER_GITHUB_TOKEN"
 )
 
 // GitHubTokenRefreshResponse is the response from the GitHub token refresh endpoint.
