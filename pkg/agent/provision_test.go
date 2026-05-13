@@ -277,6 +277,67 @@ func TestProvisionWritesTaskToPromptMd(t *testing.T) {
 			t.Errorf("expected empty prompt.md, got %q", string(content))
 		}
 	})
+
+	// Templates can declare a default `task:` in scion-agent.yaml. When the
+	// caller does not supply opts.Task, Provision must fall back to that
+	// template task and persist it to prompt.md so the harness picks it up
+	// on first launch. Without this fallback the template `task:` field is
+	// dead — it survives in scion-agent.json but never reaches the agent.
+	t.Run("from template task", func(t *testing.T) {
+		// Seed a template that ships its own task.
+		globalTplDir := filepath.Join(tmpDir, ".scion", "templates", "tpl-with-task")
+		if err := os.MkdirAll(globalTplDir, 0755); err != nil {
+			t.Fatalf("mkdir template dir: %v", err)
+		}
+		tplYAML := "task: |\n  bootstrap from template\n"
+		if err := os.WriteFile(filepath.Join(globalTplDir, "scion-agent.yaml"), []byte(tplYAML), 0644); err != nil {
+			t.Fatalf("write template yaml: %v", err)
+		}
+
+		opts := api.StartOptions{
+			Name:        "agent-template-task",
+			Template:    "tpl-with-task",
+			ProjectPath: projectScionDir,
+		}
+
+		_, err := mgr.Provision(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("Provision failed: %v", err)
+		}
+
+		promptFile := filepath.Join(resolvedGroveDir, "agents", "agent-template-task", "prompt.md")
+		content, err := os.ReadFile(promptFile)
+		if err != nil {
+			t.Fatalf("failed to read prompt.md: %v", err)
+		}
+		if strings.TrimSpace(string(content)) != "bootstrap from template" {
+			t.Errorf("expected prompt.md from template task, got %q", string(content))
+		}
+	})
+
+	// Precedence: explicit opts.Task must win over the template default.
+	t.Run("opts.Task overrides template task", func(t *testing.T) {
+		opts := api.StartOptions{
+			Name:        "agent-override",
+			Task:        "explicit wins",
+			Template:    "tpl-with-task",
+			ProjectPath: projectScionDir,
+		}
+
+		_, err := mgr.Provision(context.Background(), opts)
+		if err != nil {
+			t.Fatalf("Provision failed: %v", err)
+		}
+
+		promptFile := filepath.Join(resolvedGroveDir, "agents", "agent-override", "prompt.md")
+		content, err := os.ReadFile(promptFile)
+		if err != nil {
+			t.Fatalf("failed to read prompt.md: %v", err)
+		}
+		if string(content) != "explicit wins" {
+			t.Errorf("expected explicit task to win, got %q", string(content))
+		}
+	})
 }
 
 func TestProvisionAgentNonGitWorkspace(t *testing.T) {
