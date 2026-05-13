@@ -259,19 +259,14 @@ func (m *AgentManager) Provision(ctx context.Context, opts api.StartOptions) (*a
 		}
 	}
 
-	// Write the initial task to prompt.md for later execution.
-	// Precedence: CLI/inline opts.Task wins; otherwise fall back to the
-	// merged config's task field (sourced from the template's
-	// `scion-agent.yaml`). This lets a template ship a built-in bootstrap
-	// prompt that fires on first launch without requiring each caller to
-	// re-pass it on the command line.
-	effectiveTask := opts.Task
-	if effectiveTask == "" && cfg != nil && cfg.Task != "" {
-		effectiveTask = cfg.Task
-	}
-	if effectiveTask != "" {
+	// Persist an explicit caller-supplied task to prompt.md, overwriting
+	// any template-default task that ProvisionAgent may have written. The
+	// template-task fallback itself lives in ProvisionAgent so both this
+	// path and AgentManager.Start (which goes through GetAgent →
+	// ProvisionAgent) honor template `task:` without duplication.
+	if opts.Task != "" {
 		promptFile := filepath.Join(agentDir, "prompt.md")
-		if writeErr := os.WriteFile(promptFile, []byte(effectiveTask), 0644); writeErr != nil {
+		if writeErr := os.WriteFile(promptFile, []byte(opts.Task), 0644); writeErr != nil {
 			return cfg, fmt.Errorf("failed to write task to prompt.md: %w", writeErr)
 		}
 	}
@@ -901,6 +896,24 @@ func ProvisionAgent(ctx context.Context, agentName string, templateName string, 
 		finalScionCfg = updatedCfg
 	} else {
 		fmt.Fprintf(os.Stderr, "Warning: failed to reload agent config after harness provisioning: %v\n", err)
+	}
+
+	// Seed prompt.md from the merged config's task field (sourced from the
+	// template's `scion-agent.yaml`). This lets a template ship a built-in
+	// bootstrap prompt that fires on first launch without requiring each
+	// caller to re-pass it. Callers (AgentManager.Provision /
+	// AgentManager.Start) may overwrite this afterwards with an explicit
+	// opts.Task — the file is rewritten there before the harness starts.
+	// Guarded by an empty-content check so an explicit task supplied by an
+	// earlier provisioning step is never clobbered.
+	if finalScionCfg != nil && finalScionCfg.Task != "" {
+		promptFile := filepath.Join(agentDir, "prompt.md")
+		existing, _ := os.ReadFile(promptFile)
+		if len(strings.TrimSpace(string(existing))) == 0 {
+			if writeErr := os.WriteFile(promptFile, []byte(finalScionCfg.Task), 0644); writeErr != nil {
+				return "", "", nil, fmt.Errorf("failed to write template task to prompt.md: %w", writeErr)
+			}
+		}
 	}
 
 	return agentHome, agentWorkspace, finalScionCfg, nil
