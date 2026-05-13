@@ -259,10 +259,19 @@ func (m *AgentManager) Provision(ctx context.Context, opts api.StartOptions) (*a
 		}
 	}
 
-	// If a task was provided, write it to prompt.md for later execution
-	if opts.Task != "" {
+	// Write the initial task to prompt.md for later execution.
+	// Precedence: CLI/inline opts.Task wins; otherwise fall back to the
+	// merged config's task field (sourced from the template's
+	// `scion-agent.yaml`). This lets a template ship a built-in bootstrap
+	// prompt that fires on first launch without requiring each caller to
+	// re-pass it on the command line.
+	effectiveTask := opts.Task
+	if effectiveTask == "" && cfg != nil && cfg.Task != "" {
+		effectiveTask = cfg.Task
+	}
+	if effectiveTask != "" {
 		promptFile := filepath.Join(agentDir, "prompt.md")
-		if writeErr := os.WriteFile(promptFile, []byte(opts.Task), 0644); writeErr != nil {
+		if writeErr := os.WriteFile(promptFile, []byte(effectiveTask), 0644); writeErr != nil {
 			return cfg, fmt.Errorf("failed to write task to prompt.md: %w", writeErr)
 		}
 	}
