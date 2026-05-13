@@ -144,6 +144,8 @@ func (s *SQLiteStore) Migrate(ctx context.Context) error {
 		migrationV48,
 		migrationV49,
 		migrateV50,
+		migrationV51,
+		migrationV52,
 	}
 
 	// Create migrations table if not exists
@@ -1269,6 +1271,8 @@ UPDATE gcp_service_accounts SET scope = 'project' WHERE scope = 'grove';
 UPDATE groups SET group_type = 'project_agents' WHERE group_type = 'grove_agents';
 UPDATE notification_subscriptions SET scope = 'project' WHERE scope = 'grove';
 UPDATE subscription_templates SET scope = 'project' WHERE scope = 'grove';
+UPDATE templates SET scope = 'project' WHERE scope = 'grove';
+UPDATE harness_configs SET scope = 'project' WHERE scope = 'grove';
 `
 	if _, err := tx.ExecContext(ctx, dataUpdates); err != nil {
 		return fmt.Errorf("updating data values: %w", err)
@@ -1324,6 +1328,17 @@ CREATE INDEX IF NOT EXISTS idx_gcp_sa_project ON gcp_service_accounts(project_id
 
 	return nil
 }
+
+// migrationV51 adds group_id to messages for correlating set[] deliveries.
+const migrationV51 = `
+ALTER TABLE messages ADD COLUMN group_id TEXT NOT NULL DEFAULT '';
+`
+
+// migrationV52 renames the idle activity to working for clearer agent state reporting.
+const migrationV52 = `
+UPDATE agents SET activity = 'working' WHERE activity = 'idle';
+UPDATE agents SET stalled_from_activity = 'working' WHERE stalled_from_activity = 'idle';
+`
 
 // tableExists checks whether a table with the given name exists in the database.
 func tableExists(ctx context.Context, tx *sql.Tx, tableName string) (bool, error) {
